@@ -1,29 +1,26 @@
 /**
  * Turns the DB's current prices into the exact CSV format Kaspi's
- * "Загрузить прайс-лист" accepts — same columns as the manual-upload
- * artifact tool: SKU, model, brand, price, PP1-PP5, preorder.
- *
- * This is the SAFE, official path: no login, no cabinet automation.
- * You (or a cron job) upload the resulting file in your Kaspi cabinet,
- * or point Kaspi's automatic price-list URL at wherever you host it.
+ * "Загрузить прайс-лист" accepts — SKU, model, brand, price, PP1-PP5, preorder.
+ * Safe, official path: no login, no cabinet automation.
  */
 import { writeFileSync } from 'node:fs';
-import { openDb } from './database.js';
+import { getPool, initSchema } from './database.js';
 
 function csvCell(value: string | number): string {
   const s = String(value);
   return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 
-export function exportPriceListCsv(dbPath = 'repricer.db', outPath = 'price-list.csv') {
-  const db = openDb(dbPath);
-  const products = db
-    .prepare(
-      `SELECT sku, name, current_price, available, preorder_days
-       FROM products WHERE active = 1`
-    )
-    .all() as { sku: string; name: string; current_price: number; available: number; preorder_days: number }[];
-  db.close();
+export async function buildPriceListCsv(): Promise<string> {
+  await initSchema();
+  const db = getPool();
+  const { rows: products } = await db.query<{
+    sku: string;
+    name: string;
+    current_price: number;
+    available: number;
+    preorder_days: number;
+  }>(`SELECT sku, name, current_price, available, preorder_days FROM products WHERE active = 1`);
 
   const header = ['SKU', 'model', 'brand', 'price', 'PP1', 'PP2', 'PP3', 'PP4', 'PP5', 'preorder'];
   const rows = products.map((p) =>
@@ -43,11 +40,18 @@ export function exportPriceListCsv(dbPath = 'repricer.db', outPath = 'price-list
       .join(',')
   );
 
-  const csv = '﻿' + [header.join(','), ...rows].join('\r\n');
+  return '﻿' + [header.join(','), ...rows].join('\r\n');
+}
+
+export async function exportPriceListCsv(outPath = 'price-list.csv') {
+  const csv = await buildPriceListCsv();
   writeFileSync(outPath, csv, 'utf8');
-  console.log(`Wrote ${products.length} products to ${outPath}`);
+  console.log(`Wrote price list to ${outPath}`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  exportPriceListCsv();
+  exportPriceListCsv().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
 }

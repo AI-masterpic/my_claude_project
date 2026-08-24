@@ -8,7 +8,7 @@
  * evading any protected/authenticated surface — there isn't one here.
  */
 import { chromium, type Browser } from 'playwright';
-import { openDb } from './database.js';
+import { getPool, initSchema } from './database.js';
 
 const USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36';
@@ -53,15 +53,14 @@ async function scrapeProductPage(browser: Browser, url: string): Promise<ScrapeR
   }
 }
 
-export async function runParserOnce(dbPath = 'repricer.db') {
-  const db = openDb(dbPath);
-  const competitors = db
-    .prepare(
-      `SELECT c.id, c.kaspi_url FROM competitors c
-       JOIN products p ON p.id = c.product_id
-       WHERE c.active = 1 AND p.active = 1`
-    )
-    .all() as { id: number; kaspi_url: string }[];
+export async function runParserOnce() {
+  await initSchema();
+  const db = getPool();
+  const { rows: competitors } = await db.query<{ id: number; kaspi_url: string }>(
+    `SELECT c.id, c.kaspi_url FROM competitors c
+     JOIN products p ON p.id = c.product_id
+     WHERE c.active = 1 AND p.active = 1`
+  );
 
   if (competitors.length === 0) {
     console.log('No active competitors to check. Add rows to the competitors table first.');
@@ -69,21 +68,21 @@ export async function runParserOnce(dbPath = 'repricer.db') {
   }
 
   const browser = await chromium.launch({ headless: true });
-  const insertLog = db.prepare(
-    `INSERT INTO competitor_price_log (competitor_id, price, in_stock) VALUES (?, ?, ?)`
-  );
 
   try {
     for (const c of competitors) {
       const { price, inStock } = await scrapeProductPage(browser, c.kaspi_url);
-      insertLog.run(c.id, price, inStock === null ? null : inStock ? 1 : 0);
+      await db.query(`INSERT INTO competitor_price_log (competitor_id, price, in_stock) VALUES ($1, $2, $3)`, [
+        c.id,
+        price,
+        inStock === null ? null : inStock ? 1 : 0,
+      ]);
       console.log(`[${c.id}] ${c.kaspi_url} -> ${price ?? 'unknown'} ₸ (in stock: ${inStock ?? 'unknown'})`);
       // Be a normal visitor, not a hammer — small pause between pages.
       await new Promise((r) => setTimeout(r, 1500 + Math.random() * 1500));
     }
   } finally {
     await browser.close();
-    db.close();
   }
 }
 

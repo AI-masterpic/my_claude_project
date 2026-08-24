@@ -8,16 +8,16 @@
  * (Товары -> Загрузить прайс-лист -> Автоматическая загрузка). From then
  * on: edit here, save, and Kaspi picks it up within ~60 minutes on its own.
  *
- * No Kaspi login anywhere in this file. Deploy this as a persistent Node
- * service (Render/Railway/a VPS) — NOT a serverless platform like Vercel,
- * which would wipe the database file between requests.
+ * Data lives in Postgres (Supabase free tier) via DATABASE_URL — decoupled
+ * from wherever this app itself runs, so a redeploy/restart of the app
+ * never touches the data. No Kaspi login anywhere in this file.
  */
 import http from 'node:http';
-import { openDb } from './database.js';
+import { getPool, initSchema } from './database.js';
+import { buildPriceListCsv } from './pricelist-export.js';
 import { fetchRecentOrders, summarize, type OrdersDashboard } from './orders.js';
 
 const PORT = Number(process.env.PORT) || 3000;
-const db = openDb(process.env.DB_PATH || 'repricer.db');
 
 interface ProductRow {
   id: number;
@@ -28,25 +28,12 @@ interface ProductRow {
   preorder_days: number;
 }
 
-function getProducts(): ProductRow[] {
-  return db
-    .prepare(`SELECT id, sku, name, current_price, available, preorder_days FROM products WHERE active = 1 ORDER BY sku`)
-    .all() as unknown as ProductRow[];
-}
-
-function csvCell(value: string | number): string {
-  const s = String(value);
-  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-}
-
-function buildPriceListCsv(): string {
-  const header = ['SKU', 'model', 'brand', 'price', 'PP1', 'PP2', 'PP3', 'PP4', 'PP5', 'preorder'];
-  const rows = getProducts().map((p) =>
-    [p.sku, p.name, 'Без бренда', p.current_price, p.available ? 'yes' : 'no', '', '', '', '', p.preorder_days > 0 ? p.preorder_days : '']
-      .map(csvCell)
-      .join(',')
+async function getProducts(): Promise<ProductRow[]> {
+  const db = getPool();
+  const { rows } = await db.query<ProductRow>(
+    `SELECT id, sku, name, current_price, available, preorder_days FROM products WHERE active = 1 ORDER BY sku`
   );
-  return '﻿' + [header.join(','), ...rows].join('\r\n');
+  return rows;
 }
 
 function escapeHtml(s: string): string {
@@ -92,8 +79,9 @@ function renderOrdersBlock(summary: OrdersDashboard | null, error: string | null
 }
 
 async function renderPage(): Promise<string> {
-  const { summary, error } = await getOrdersSummary();
-  const rows = getProducts()
+  const [{ summary, error }, products] = await Promise.all([getOrdersSummary(), getProducts()]);
+
+  const rows = products
     .map(
       (p) => `
     <tr>
@@ -152,46 +140,61 @@ async function readBody(req: http.IncomingMessage): Promise<string> {
 }
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
+  try {
+    const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
 
-  if (req.method === 'GET' && url.pathname === '/') {
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    res.end(await renderPage());
-    return;
-  }
-
-  if (req.method === 'GET' && url.pathname === '/price-list.csv') {
-    res.writeHead(200, {
-      'content-type': 'text/csv; charset=utf-8',
-      'cache-control': 'no-store',
-    });
-    res.end(buildPriceListCsv());
-    return;
-  }
-
-  if (req.method === 'POST' && url.pathname === '/api/save') {
-    const body = await readBody(req);
-    const params = new URLSearchParams(body);
-    const update = db.prepare(
-      `UPDATE products SET current_price = ?, available = ?, preorder_days = ?, updated_at = datetime('now') WHERE id = ?`
-    );
-    for (const p of getProducts()) {
-      const price = Number(params.get(`price_${p.id}`) ?? p.current_price);
-      const available = params.get(`available_${p.id}`) ? 1 : 0;
-      const preorder = Number(params.get(`preorder_${p.id}`) ?? 0);
-      update.run(price, available, preorder, p.id);
+    if (req.method === 'GET' && url.pathname === '/') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(await renderPage());
+      return;
     }
-    res.writeHead(302, { location: '/' });
-    res.end();
-    return;
+
+    if (req.method === 'GET' && url.pathname === '/price-list.csv') {
+      res.writeHead(200, {
+        'content-type': 'text/csv; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(await buildPriceListCsv());
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/save') {
+      const body = await readBody(req);
+      const params = new URLSearchParams(body);
+      const db = getPool();
+      const products = await getProducts();
+      for (const p of products) {
+        const price = Number(params.get(`price_${p.id}`) ?? p.current_price);
+        const available = params.get(`available_${p.id}`) ? 1 : 0;
+        const preorder = Number(params.get(`preorder_${p.id}`) ?? 0);
+        await db.query(
+          `UPDATE products SET current_price = $1, available = $2, preorder_days = $3, updated_at = NOW() WHERE id = $4`,
+          [price, available, preorder, p.id]
+        );
+      }
+      res.writeHead(302, { location: '/' });
+      res.end();
+      return;
+    }
+
+    res.writeHead(404, { 'content-type': 'text/plain' });
+    res.end('Not found');
+  } catch (err) {
+    console.error(err);
+    res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('Server error: ' + (err as Error).message);
   }
-
-  res.writeHead(404, { 'content-type': 'text/plain' });
-  res.end('Not found');
 });
 
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Edit page: http://localhost:${PORT}/`);
-  console.log(`Price-list feed: http://localhost:${PORT}/price-list.csv`);
-});
+initSchema()
+  .then(() => {
+    server.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+      console.log(`Edit page: http://localhost:${PORT}/`);
+      console.log(`Price-list feed: http://localhost:${PORT}/price-list.csv`);
+    });
+  })
+  .catch((err) => {
+    console.error('Failed to initialize database schema:', err.message);
+    process.exit(1);
+  });

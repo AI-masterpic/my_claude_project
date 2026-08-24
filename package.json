@@ -11,10 +11,12 @@
     "cabinet-sync": "node dist/cabinet-sync.js"
   },
   "dependencies": {
-    "playwright": "^1.47.0"
+    "playwright": "^1.47.0",
+    "pg": "^8.13.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/pg": "^8.11.10",
     "typescript": "^5.5.4"
   },
   "engines": {

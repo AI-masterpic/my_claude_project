@@ -1,10 +1,10 @@
 /**
- * Pricing decision engine. Pure logic, no network calls — takes the latest
- * competitor snapshots already sitting in the DB (from parser.ts) and
- * decides what YOUR price should be. Writing the decision out to Kaspi is
- * a separate step (price-list file, or cabinet-sync.ts) — this only decides.
+ * Pricing decision engine. Pure logic in decidePrice() — no network calls.
+ * runPricingOnce() reads the latest competitor snapshots from Postgres and
+ * writes the decision back; pushing it out to Kaspi is a separate step
+ * (pricelist-export.ts / server.ts).
  */
-import { openDb } from './database.js';
+import { getPool, initSchema } from './database.js';
 
 export type PriceDecisionReason = 'undercut' | 'floor_hit' | 'recovered_to_max' | 'no_change';
 
@@ -16,13 +16,6 @@ export interface PriceDecision {
   bestCompetitorPrice: number | null;
 }
 
-/**
- * Core rule, deliberately simple and easy to audit:
- *  - No competitor price known -> recover to max_price (your best price).
- *  - Competitor price known -> undercut by `undercutStep`, but never below min_price.
- *  - If undercutting would exceed max_price (competitor is already expensive),
- *    cap at max_price — don't leave money on the table just because you can.
- */
 export function decidePrice(params: {
   currentPrice: number;
   minPrice: number;
@@ -53,48 +46,39 @@ export function decidePrice(params: {
   return { newPrice, reason: 'undercut' };
 }
 
-/** Runs the rule for every active product using the freshest competitor snapshot per competitor row. */
-export function runPricingOnce(dbPath = 'repricer.db'): PriceDecision[] {
-  const db = openDb(dbPath);
+export async function runPricingOnce(): Promise<PriceDecision[]> {
+  await initSchema();
+  const db = getPool();
   const decisions: PriceDecision[] = [];
 
-  const products = db
-    .prepare(
-      `SELECT p.id, p.current_price, p.min_price, p.max_price,
-              s.undercut_step, s.recovery_enabled
-       FROM products p
-       LEFT JOIN strategy_settings s ON s.product_id = p.id
-       WHERE p.active = 1`
-    )
-    .all() as {
+  const { rows: products } = await db.query<{
     id: number;
     current_price: number;
     min_price: number;
     max_price: number;
     undercut_step: number | null;
     recovery_enabled: number | null;
-  }[];
-
-  const bestCompetitorStmt = db.prepare(
-    `SELECT MIN(l.price) as best_price
-     FROM competitor_price_log l
-     JOIN competitors c ON c.id = l.competitor_id
-     WHERE c.product_id = ?
-       AND l.price IS NOT NULL
-       AND l.scraped_at = (
-         SELECT MAX(l2.scraped_at) FROM competitor_price_log l2 WHERE l2.competitor_id = l.competitor_id
-       )`
+  }>(
+    `SELECT p.id, p.current_price, p.min_price, p.max_price,
+            s.undercut_step, s.recovery_enabled
+     FROM products p
+     LEFT JOIN strategy_settings s ON s.product_id = p.id
+     WHERE p.active = 1`
   );
-
-  const insertDecision = db.prepare(
-    `INSERT INTO price_change_log (product_id, old_price, new_price, reason, best_competitor_price)
-     VALUES (?, ?, ?, ?, ?)`
-  );
-  const updatePrice = db.prepare(`UPDATE products SET current_price = ?, updated_at = datetime('now') WHERE id = ?`);
 
   for (const p of products) {
-    const row = bestCompetitorStmt.get(p.id) as { best_price: number | null } | undefined;
-    const bestCompetitorPrice = row?.best_price ?? null;
+    const { rows: bestRows } = await db.query<{ best_price: number | null }>(
+      `SELECT MIN(l.price) as best_price
+       FROM competitor_price_log l
+       JOIN competitors c ON c.id = l.competitor_id
+       WHERE c.product_id = $1
+         AND l.price IS NOT NULL
+         AND l.scraped_at = (
+           SELECT MAX(l2.scraped_at) FROM competitor_price_log l2 WHERE l2.competitor_id = l.competitor_id
+         )`,
+      [p.id]
+    );
+    const bestCompetitorPrice = bestRows[0]?.best_price ?? null;
 
     const { newPrice, reason } = decidePrice({
       currentPrice: p.current_price,
@@ -108,20 +92,30 @@ export function runPricingOnce(dbPath = 'repricer.db'): PriceDecision[] {
     decisions.push({ productId: p.id, oldPrice: p.current_price, newPrice, reason, bestCompetitorPrice });
 
     if (reason !== 'no_change') {
-      insertDecision.run(p.id, p.current_price, newPrice, reason, bestCompetitorPrice);
-      updatePrice.run(newPrice, p.id);
+      await db.query(
+        `INSERT INTO price_change_log (product_id, old_price, new_price, reason, best_competitor_price)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [p.id, p.current_price, newPrice, reason, bestCompetitorPrice]
+      );
+      await db.query(`UPDATE products SET current_price = $1, updated_at = NOW() WHERE id = $2`, [newPrice, p.id]);
     }
   }
 
-  db.close();
   return decisions;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const decisions = runPricingOnce();
-  for (const d of decisions) {
-    console.log(
-      `product ${d.productId}: ${d.oldPrice}₸ -> ${d.newPrice}₸ (${d.reason}, competitor best: ${d.bestCompetitorPrice ?? 'n/a'})`
-    );
-  }
+  runPricingOnce()
+    .then((decisions) => {
+      for (const d of decisions) {
+        console.log(
+          `product ${d.productId}: ${d.oldPrice}₸ -> ${d.newPrice}₸ (${d.reason}, конкурент: ${d.bestCompetitorPrice ?? 'n/a'})`
+        );
+      }
+      process.exit(0);
+    })
+    .catch((err) => {
+      console.error(err);
+      process.exit(1);
+    });
 }

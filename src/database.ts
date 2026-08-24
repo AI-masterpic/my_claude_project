@@ -1,77 +1,91 @@
 /**
- * SQLite schema for the repricer MVP. One file, zero setup — good enough
- * for one seller's own catalog. Swap for Postgres later if it grows.
+ * Postgres schema for the repricer MVP, meant to run on Supabase's free
+ * tier — decoupled from wherever the app itself is hosted (Render), so
+ * the data survives even if the app's own disk doesn't.
  *
- * Uses Node's built-in node:sqlite (no native compilation needed — avoids
- * fighting a broken node-gyp/Python toolchain for an MVP).
+ * Set DATABASE_URL in your own environment (Supabase gives you this
+ * connection string in Project Settings -> Database). Never in chat,
+ * never committed.
  */
-import { DatabaseSync } from 'node:sqlite';
+import pg from 'pg';
 
-export function openDb(path = 'repricer.db') {
-  const db = new DatabaseSync(path);
-  db.exec('PRAGMA journal_mode = WAL');
+const { Pool } = pg;
 
-  db.exec(`
-    -- One row per SKU you sell.
+let pool: pg.Pool | null = null;
+
+export function getPool(): pg.Pool {
+  if (!pool) {
+    const connectionString = process.env.DATABASE_URL;
+    if (!connectionString) {
+      throw new Error('Set DATABASE_URL in your own environment (Supabase connection string).');
+    }
+    pool = new Pool({ connectionString, ssl: { rejectUnauthorized: false } });
+  }
+  return pool;
+}
+
+export async function initSchema(): Promise<void> {
+  const db = getPool();
+  await db.query(`
     CREATE TABLE IF NOT EXISTS products (
-      id             INTEGER PRIMARY KEY AUTOINCREMENT,
-      sku            TEXT NOT NULL UNIQUE,        -- your own article, matches price-list SKU
-      kaspi_code     TEXT,                        -- Kaspi's product code (from your own live card URL)
+      id             SERIAL PRIMARY KEY,
+      sku            TEXT NOT NULL UNIQUE,
+      kaspi_code     TEXT,
       name           TEXT NOT NULL,
-      cost_price     INTEGER NOT NULL,             -- your cost, tenge — never sell below this without knowing it
-      min_price      INTEGER NOT NULL,             -- floor: bot never goes below this
-      max_price      INTEGER NOT NULL,             -- ceiling: base/recovery price when competitors vanish
+      cost_price     INTEGER NOT NULL,
+      min_price      INTEGER NOT NULL,
+      max_price      INTEGER NOT NULL,
       current_price  INTEGER NOT NULL,
-      preorder_days  INTEGER NOT NULL DEFAULT 0,   -- 0..30, matches Kaspi price-list "preorder" column
-      available      INTEGER NOT NULL DEFAULT 1,   -- 1 = yes, 0 = no
-      active         INTEGER NOT NULL DEFAULT 1,   -- turn a product off without deleting its history
-      created_at     TEXT NOT NULL DEFAULT (datetime('now')),
-      updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
-    );
-
-    -- Competitor cards tracked for a given product (a product can have several).
-    CREATE TABLE IF NOT EXISTS competitors (
-      id             INTEGER PRIMARY KEY AUTOINCREMENT,
-      product_id     INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-      kaspi_url      TEXT NOT NULL,                -- public product page to scrape
-      label          TEXT,                         -- optional: seller name, for your own reference
+      preorder_days  INTEGER NOT NULL DEFAULT 0,
+      available      INTEGER NOT NULL DEFAULT 1,
       active         INTEGER NOT NULL DEFAULT 1,
-      created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
-    -- One row per scrape: a snapshot of a competitor's price at a point in time.
+    CREATE TABLE IF NOT EXISTS competitors (
+      id             SERIAL PRIMARY KEY,
+      product_id     INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+      kaspi_url      TEXT NOT NULL,
+      label          TEXT,
+      active         INTEGER NOT NULL DEFAULT 1,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS competitor_price_log (
-      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      id             SERIAL PRIMARY KEY,
       competitor_id  INTEGER NOT NULL REFERENCES competitors(id) ON DELETE CASCADE,
-      price          INTEGER,                      -- NULL = scrape failed or card unavailable
-      in_stock       INTEGER,                      -- 1/0/NULL if unknown
-      scraped_at     TEXT NOT NULL DEFAULT (datetime('now'))
+      price          INTEGER,
+      in_stock       INTEGER,
+      scraped_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
-    -- One row per price decision the bot makes for a product (audit trail).
     CREATE TABLE IF NOT EXISTS price_change_log (
-      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      id               SERIAL PRIMARY KEY,
       product_id       INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
       old_price        INTEGER NOT NULL,
       new_price        INTEGER NOT NULL,
-      reason           TEXT NOT NULL,               -- 'undercut' | 'floor_hit' | 'recovered_to_max' | 'manual'
-      best_competitor_price INTEGER,                -- what triggered this decision, if any
-      applied          INTEGER NOT NULL DEFAULT 0,  -- 1 once actually pushed to Kaspi (price-list or cabinet)
-      created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+      reason           TEXT NOT NULL,
+      best_competitor_price INTEGER,
+      applied          INTEGER NOT NULL DEFAULT 0,
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
-    -- Per-product strategy knobs, kept separate from the product row so you
-    -- can tune strategy without touching catalog data.
     CREATE TABLE IF NOT EXISTS strategy_settings (
       product_id       INTEGER PRIMARY KEY REFERENCES products(id) ON DELETE CASCADE,
-      undercut_step    INTEGER NOT NULL DEFAULT 50,  -- tenge below best competitor
-      recovery_enabled INTEGER NOT NULL DEFAULT 1,   -- climb back to max_price when no competitor threat
-      check_interval_min INTEGER NOT NULL DEFAULT 60 -- how often the scraper visits this product's competitors
+      undercut_step    INTEGER NOT NULL DEFAULT 50,
+      recovery_enabled INTEGER NOT NULL DEFAULT 1,
+      check_interval_min INTEGER NOT NULL DEFAULT 60
     );
 
     CREATE INDEX IF NOT EXISTS idx_competitor_log_competitor ON competitor_price_log(competitor_id, scraped_at);
     CREATE INDEX IF NOT EXISTS idx_price_log_product ON price_change_log(product_id, created_at);
   `);
+}
 
-  return db;
+export async function closePool(): Promise<void> {
+  if (pool) {
+    await pool.end();
+    pool = null;
+  }
 }

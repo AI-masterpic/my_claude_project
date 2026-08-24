@@ -11,6 +11,7 @@
  * instead of erroring or duplicating.
  */
 import { getPool, initSchema } from './database.js';
+import { DEFAULT_COMMISSION_PCT } from './economics.js';
 
 interface SeedProduct {
   sku: string;
@@ -21,6 +22,8 @@ interface SeedProduct {
   currentPrice: number;
   preorderDays?: number; // 0-30, matches the edit page's input range
   available?: boolean;
+  bonusCost?: number; // bundled freebie (e.g. a keychain), 0 if none
+  commissionPct?: number; // defaults to economics.ts's DEFAULT_COMMISSION_PCT
 }
 
 const PRODUCTS: SeedProduct[] = [
@@ -42,8 +45,8 @@ async function seed() {
 
   for (const p of PRODUCTS) {
     await db.query(
-      `INSERT INTO products (sku, name, cost_price, min_price, max_price, current_price, preorder_days, available)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO products (sku, name, cost_price, min_price, max_price, current_price, preorder_days, available, bonus_cost, commission_pct)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        ON CONFLICT (sku) DO UPDATE SET
          name = EXCLUDED.name,
          cost_price = EXCLUDED.cost_price,
@@ -52,6 +55,8 @@ async function seed() {
          current_price = EXCLUDED.current_price,
          preorder_days = EXCLUDED.preorder_days,
          available = EXCLUDED.available,
+         bonus_cost = EXCLUDED.bonus_cost,
+         commission_pct = EXCLUDED.commission_pct,
          updated_at = NOW()`,
       [
         p.sku,
@@ -62,6 +67,8 @@ async function seed() {
         p.currentPrice,
         p.preorderDays ?? 0,
         p.available === false ? 0 : 1,
+        p.bonusCost ?? 0,
+        p.commissionPct ?? DEFAULT_COMMISSION_PCT,
       ]
     );
     console.log(`Upserted ${p.sku} — ${p.name}`);

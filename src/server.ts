@@ -16,6 +16,7 @@ import http from 'node:http';
 import { getPool, initSchema } from './database.js';
 import { buildPriceListCsv } from './pricelist-export.js';
 import { fetchRecentOrders, summarize, type OrdersDashboard } from './orders.js';
+import { calculateUnitEconomics, DEFAULT_COMMISSION_PCT } from './economics.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -26,12 +27,18 @@ interface ProductRow {
   current_price: number;
   available: number;
   preorder_days: number;
+  cost_price: number;
+  bonus_cost: number;
+  commission_pct: number;
+  weight_kg: number;
 }
 
 async function getProducts(): Promise<ProductRow[]> {
   const db = getPool();
   const { rows } = await db.query<ProductRow>(
-    `SELECT id, sku, name, current_price, available, preorder_days FROM products WHERE active = 1 ORDER BY sku`
+    `SELECT id, sku, name, current_price, available, preorder_days,
+            cost_price, bonus_cost, commission_pct, weight_kg
+     FROM products WHERE active = 1 ORDER BY sku`
   );
   return rows;
 }
@@ -82,16 +89,28 @@ async function renderPage(): Promise<string> {
   const [{ summary, error }, products] = await Promise.all([getOrdersSummary(), getProducts()]);
 
   const rows = products
-    .map(
-      (p) => `
+    .map((p) => {
+      const econ = calculateUnitEconomics({
+        currentPrice: p.current_price,
+        costPrice: p.cost_price,
+        bonusCost: p.bonus_cost,
+        commissionPct: p.commission_pct,
+        weightKg: p.weight_kg,
+      });
+      const profitClass = econ.profit < 0 ? 'neg' : '';
+      return `
     <tr>
       <td>${escapeHtml(p.sku)}</td>
       <td>${escapeHtml(p.name)}</td>
       <td><input type="number" name="price_${p.id}" value="${p.current_price}" step="10"></td>
       <td><input type="checkbox" name="available_${p.id}" ${p.available ? 'checked' : ''}></td>
       <td><input type="number" name="preorder_${p.id}" value="${p.preorder_days}" min="0" max="30"></td>
-    </tr>`
-    )
+      <td><input type="number" name="cost_${p.id}" value="${p.cost_price}" step="10"></td>
+      <td><input type="number" name="bonus_${p.id}" value="${p.bonus_cost}" step="10"></td>
+      <td class="calc ${profitClass}">${Math.round(econ.profit).toLocaleString('ru-RU')}₸</td>
+      <td class="calc ${profitClass}">${econ.marginPct.toFixed(1)}%</td>
+    </tr>`;
+    })
     .join('');
 
   return `<!doctype html>
@@ -115,6 +134,9 @@ async function renderPage(): Promise<string> {
   .stat .label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #9c9086; }
   .stat.highlight .num { color: #8c2a32; }
   .muted { font-size: 12px; color: #9c9086; margin: 4px 0 0; }
+  td.calc { font-variant-numeric: tabular-nums; color: #2e7d32; font-weight: 600; }
+  td.calc.neg { color: #8c2a32; }
+  .econ-note { font-size: 12px; color: #9c9086; max-width: 720px; margin: -8px 0 20px; }
 </style>
 </head>
 <body>
@@ -123,11 +145,12 @@ async function renderPage(): Promise<string> {
   <h1>Цены и предзаказ</h1>
   <form method="POST" action="/api/save">
     <table>
-      <thead><tr><th>SKU</th><th>Название</th><th>Цена</th><th>В наличии</th><th>Предзаказ, дн.</th></tr></thead>
+      <thead><tr><th>SKU</th><th>Название</th><th>Цена</th><th>В наличии</th><th>Предзаказ, дн.</th><th>Себестоимость</th><th>Бонус</th><th>Прибыль/шт</th><th>Маржа</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
     <button type="submit">Сохранить</button>
   </form>
+  <p class="econ-note">Прибыль/маржа считаются автоматически: комиссия Kaspi ${DEFAULT_COMMISSION_PCT}% (с НДС), доставка по Казахстану (799,11₸ + НДС 16% для заказов 5 000–15 000₸), налог ИП на упрощёнке 3% с оборота.</p>
   <p class="link">Ссылка для автозагрузки в Kaspi (вставить один раз в Товары → Загрузить прайс-лист → Автоматическая загрузка):<br><code>${'{ДОМЕН_ПОСЛЕ_ДЕПЛОЯ}'}/price-list.csv</code></p>
 </body>
 </html>`;
@@ -167,9 +190,13 @@ const server = http.createServer(async (req, res) => {
         const price = Number(params.get(`price_${p.id}`) ?? p.current_price);
         const available = params.get(`available_${p.id}`) ? 1 : 0;
         const preorder = Number(params.get(`preorder_${p.id}`) ?? 0);
+        const cost = Number(params.get(`cost_${p.id}`) ?? p.cost_price);
+        const bonus = Number(params.get(`bonus_${p.id}`) ?? p.bonus_cost);
         await db.query(
-          `UPDATE products SET current_price = $1, available = $2, preorder_days = $3, updated_at = NOW() WHERE id = $4`,
-          [price, available, preorder, p.id]
+          `UPDATE products SET current_price = $1, available = $2, preorder_days = $3,
+                                cost_price = $4, bonus_cost = $5, updated_at = NOW()
+           WHERE id = $6`,
+          [price, available, preorder, cost, bonus, p.id]
         );
       }
       res.writeHead(302, { location: '/' });

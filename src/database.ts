@@ -81,6 +81,14 @@ export async function initSchema(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_competitor_log_competitor ON competitor_price_log(competitor_id, scraped_at);
     CREATE INDEX IF NOT EXISTS idx_price_log_product ON price_change_log(product_id, created_at);
   `);
+
+  // Unit-economics fields — added after the initial schema, so existing
+  // deployments need these bolted on rather than created fresh.
+  await db.query(`
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS bonus_cost INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS commission_pct NUMERIC NOT NULL DEFAULT 13.5;
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS weight_kg NUMERIC NOT NULL DEFAULT 0;
+  `);
 }
 
 export async function closePool(): Promise<void> {

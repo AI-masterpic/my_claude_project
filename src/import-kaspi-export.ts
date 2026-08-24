@@ -20,6 +20,7 @@
  */
 import xlsx from 'xlsx';
 import { getPool, initSchema } from './database.js';
+import { DEFAULT_COMMISSION_PCT } from './economics.js';
 
 const EXPECTED_HEADER = [
   'Артикул',
@@ -119,8 +120,8 @@ async function main() {
 
   for (const p of products) {
     await db.query(
-      `INSERT INTO products (sku, name, cost_price, min_price, max_price, current_price, preorder_days, available)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO products (sku, name, cost_price, min_price, max_price, current_price, preorder_days, available, bonus_cost, commission_pct)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        ON CONFLICT (sku) DO UPDATE SET
          name = EXCLUDED.name,
          min_price = EXCLUDED.min_price,
@@ -132,15 +133,20 @@ async function main() {
       [
         p.sku,
         p.name,
-        // cost_price isn't in Kaspi's export (Kaspi doesn't know your cost).
-        // Existing rows keep whatever cost you already set; new rows start
-        // at 0 — fill in real cost later for accurate margin numbers.
+        // cost_price/bonus_cost/commission_pct aren't in Kaspi's export
+        // (Kaspi doesn't know your cost or your unit economics setup) —
+        // these three are ONLY set on first insert (not in the UPDATE SET
+        // above), so re-importing never wipes out numbers you already
+        // entered on the edit page. New rows start at sane defaults —
+        // fill in real cost/bonus per SKU later for accurate margins.
         0,
         p.minPrice,
         p.maxPrice,
         p.currentPrice,
         p.preorderDays,
         p.available ? 1 : 0,
+        0,
+        DEFAULT_COMMISSION_PCT,
       ]
     );
   }

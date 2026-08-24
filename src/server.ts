@@ -137,9 +137,26 @@ async function renderPage(): Promise<string> {
   td.calc { font-variant-numeric: tabular-nums; color: #2e7d32; font-weight: 600; }
   td.calc.neg { color: #8c2a32; }
   .econ-note { font-size: 12px; color: #9c9086; max-width: 720px; margin: -8px 0 20px; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 24px; border-bottom: 1px solid #e4dad0; max-width: 720px; }
+  .tab { font-size: 13px; color: #756a60; text-decoration: none; padding: 8px 14px; border-bottom: 2px solid transparent; }
+  .tab.active { color: #8c2a32; border-bottom-color: #8c2a32; font-weight: 600; }
+  .calc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; max-width: 900px; }
+  .calc-field { margin-bottom: 16px; }
+  .calc-field label { display: flex; justify-content: space-between; font-size: 13px; color: #756a60; margin-bottom: 4px; }
+  .calc-field input[type="number"] { width: 100%; padding: 6px 8px; box-sizing: border-box; }
+  .calc-field input[type="range"] { width: 100%; }
+  .calc-field .val { font-weight: 600; color: #201c1a; }
+  .result-table { width: 100%; border-collapse: collapse; }
+  .result-table td { padding: 7px 10px; border-bottom: 1px solid #e4dad0; font-size: 14px; }
+  .result-table td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .result-table tr.total td { font-weight: 700; font-size: 16px; border-top: 2px solid #201c1a; border-bottom: none; }
+  .result-table tr.total.neg td { color: #8c2a32; }
+  .result-table tr.total.pos td { color: #2e7d32; }
+  .const-badge { font-size: 10px; text-transform: uppercase; background: #f3ede6; color: #9c9086; padding: 1px 6px; border-radius: 4px; margin-left: 6px; }
 </style>
 </head>
 <body>
+  <nav class="tabs"><a class="tab active" href="/">Заказы и цены</a><a class="tab" href="/unit-economics">Юнит-экономика</a></nav>
   <h1>Заказы</h1>
   ${renderOrdersBlock(summary, error)}
   <h1>Цены и предзаказ</h1>
@@ -152,6 +169,156 @@ async function renderPage(): Promise<string> {
   </form>
   <p class="econ-note">Прибыль/маржа считаются автоматически: комиссия Kaspi ${DEFAULT_COMMISSION_PCT}% (с НДС), доставка по Казахстану (799,11₸ + НДС 16% для заказов 5 000–15 000₸), налог ИП на упрощёнке 3% с оборота.</p>
   <p class="link">Ссылка для автозагрузки в Kaspi (вставить один раз в Товары → Загрузить прайс-лист → Автоматическая загрузка):<br><code>${'{ДОМЕН_ПОСЛЕ_ДЕПЛОЯ}'}/price-list.csv</code></p>
+</body>
+</html>`;
+}
+
+function renderUnitEconomicsPage(): string {
+  return `<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Kaspi — юнит-экономика</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Arial, sans-serif; background: #faf7f3; color: #201c1a; padding: 32px; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 24px; border-bottom: 1px solid #e4dad0; max-width: 900px; }
+  .tab { font-size: 13px; color: #756a60; text-decoration: none; padding: 8px 14px; border-bottom: 2px solid transparent; }
+  .tab.active { color: #8c2a32; border-bottom-color: #8c2a32; font-weight: 600; }
+  .calc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 32px; max-width: 900px; align-items: start; }
+  .calc-field { margin-bottom: 16px; }
+  .calc-field label { display: flex; justify-content: space-between; font-size: 13px; color: #756a60; margin-bottom: 4px; }
+  .calc-field input[type="number"] { width: 100%; padding: 6px 8px; box-sizing: border-box; font-size: 14px; }
+  .calc-field input[type="range"] { width: 100%; }
+  .calc-field .val { font-weight: 600; color: #201c1a; }
+  .const-badge { font-size: 10px; text-transform: uppercase; background: #f3ede6; color: #9c9086; padding: 1px 6px; border-radius: 4px; margin-left: 6px; }
+  .result-card { background: #fff; border: 1px solid #e4dad0; border-radius: 12px; padding: 18px 20px; max-width: 420px; }
+  .result-table { width: 100%; border-collapse: collapse; }
+  .result-table td { padding: 7px 0; border-bottom: 1px solid #e4dad0; font-size: 14px; }
+  .result-table td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  .result-table tr.total td { font-weight: 700; font-size: 16px; border-top: 2px solid #201c1a; border-bottom: none; padding-top: 12px; }
+  .result-table tr.total.neg td { color: #8c2a32; }
+  .result-table tr.total.pos td { color: #2e7d32; }
+  .muted { font-size: 12px; color: #9c9086; margin: 4px 0 0; }
+</style>
+</head>
+<body>
+  <nav class="tabs"><a class="tab" href="/">Заказы и цены</a><a class="tab active" href="/unit-economics">Юнит-экономика</a></nav>
+  <h1>Юнит-экономика</h1>
+  <p class="muted">Калькулятор одной штуки товара — все поля переменные, кроме налога ИП (3%, упрощёнка). Доставка Kaspi считается сама по цене товара, по официальному тарифу "по Казахстану".</p>
+
+  <div class="calc-grid">
+    <div>
+      <div class="calc-field">
+        <label>Цена продажи на Kaspi, ₸ <span class="val" id="v-price">8990</span></label>
+        <input type="number" id="price" value="8990" step="10" min="0">
+      </div>
+      <div class="calc-field">
+        <label>Себестоимость товара, ₸ <span class="val" id="v-cost">4105</span></label>
+        <input type="number" id="cost" value="4105" step="10" min="0">
+      </div>
+      <div class="calc-field">
+        <label>Комиссия Kaspi, % <span class="val" id="v-commission">13.5%</span></label>
+        <input type="number" id="commission" value="13.5" step="0.1" min="0" max="100">
+      </div>
+      <div class="calc-field">
+        <label>Бонус на товар (от продавца), % <span class="val" id="v-bonusPct">5%</span></label>
+        <input type="range" id="bonusPct" value="5" step="0.5" min="5" max="15">
+      </div>
+      <div class="calc-field">
+        <label>Бонус за отзыв, ₸ <span class="val" id="v-reviewBonus">100</span></label>
+        <input type="range" id="reviewBonus" value="100" step="50" min="100" max="2000">
+      </div>
+      <div class="calc-field">
+        <label>Реклама, % <span class="val" id="v-adsPct">5%</span></label>
+        <input type="range" id="adsPct" value="5" step="1" min="5" max="50">
+      </div>
+      <div class="calc-field">
+        <label>Налог ИП (упрощёнка) <span class="const-badge">константа</span></label>
+        <input type="number" value="3" disabled style="opacity:.6">
+      </div>
+    </div>
+
+    <div class="result-card">
+      <table class="result-table">
+        <tr><td>Цена продажи</td><td id="r-price">—</td></tr>
+        <tr><td>Себестоимость</td><td id="r-cost">—</td></tr>
+        <tr><td>Комиссия Kaspi</td><td id="r-commission">—</td></tr>
+        <tr><td>Kaspi Доставка (авто, по РК)</td><td id="r-delivery">—</td></tr>
+        <tr><td>Бонус на товар</td><td id="r-bonusPct">—</td></tr>
+        <tr><td>Бонус за отзыв</td><td id="r-reviewBonus">—</td></tr>
+        <tr><td>Реклама</td><td id="r-ads">—</td></tr>
+        <tr><td>Налог ИП (3%)</td><td id="r-tax">—</td></tr>
+        <tr class="total" id="row-profit"><td>Чистая прибыль/шт</td><td id="r-profit">—</td></tr>
+        <tr class="total" id="row-margin"><td>Маржа (от цены продажи)</td><td id="r-margin">—</td></tr>
+        <tr class="total" id="row-roi"><td>Рентабельность (от себестоимости)</td><td id="r-roi">—</td></tr>
+      </table>
+    </div>
+  </div>
+
+<script>
+// Kaspi Delivery, "По Казахстану" column — official tariff table (Kaspi's
+// "Информация о стоимости услуг — Kaspi Доставка" PDF). Independent of
+// weight below 15,000₸; mirrors src/economics.ts on the server side.
+function kaspiDeliveryExclVat(price) {
+  if (price < 5000) return 0;
+  if (price <= 15000) return 799.11;
+  return 1299.11; // >15,000₸, "до 5 кг" band — this calculator assumes light goods
+}
+const DELIVERY_VAT = 1.16;
+const TAX_PCT = 3;
+
+function fmt(n) {
+  return Math.round(n).toLocaleString('ru-RU') + '₸';
+}
+
+function recalc() {
+  const price = Number(document.getElementById('price').value) || 0;
+  const cost = Number(document.getElementById('cost').value) || 0;
+  const commissionPct = Number(document.getElementById('commission').value) || 0;
+  const bonusPct = Number(document.getElementById('bonusPct').value) || 0;
+  const reviewBonus = Number(document.getElementById('reviewBonus').value) || 0;
+  const adsPct = Number(document.getElementById('adsPct').value) || 0;
+
+  document.getElementById('v-price').textContent = price.toLocaleString('ru-RU');
+  document.getElementById('v-cost').textContent = cost.toLocaleString('ru-RU');
+  document.getElementById('v-commission').textContent = commissionPct + '%';
+  document.getElementById('v-bonusPct').textContent = bonusPct + '%';
+  document.getElementById('v-reviewBonus').textContent = reviewBonus.toLocaleString('ru-RU');
+  document.getElementById('v-adsPct').textContent = adsPct + '%';
+
+  const commission = price * (commissionPct / 100);
+  const delivery = kaspiDeliveryExclVat(price) * DELIVERY_VAT;
+  const bonusAmount = price * (bonusPct / 100);
+  const adsAmount = price * (adsPct / 100);
+  const tax = price * (TAX_PCT / 100);
+
+  const profit = price - cost - commission - delivery - bonusAmount - reviewBonus - adsAmount - tax;
+  const margin = price > 0 ? (profit / price) * 100 : 0;
+  const roi = cost > 0 ? (profit / cost) * 100 : 0;
+
+  document.getElementById('r-price').textContent = fmt(price);
+  document.getElementById('r-cost').textContent = '−' + fmt(cost);
+  document.getElementById('r-commission').textContent = '−' + fmt(commission);
+  document.getElementById('r-delivery').textContent = '−' + fmt(delivery);
+  document.getElementById('r-bonusPct').textContent = '−' + fmt(bonusAmount);
+  document.getElementById('r-reviewBonus').textContent = '−' + fmt(reviewBonus);
+  document.getElementById('r-ads').textContent = '−' + fmt(adsAmount);
+  document.getElementById('r-tax').textContent = '−' + fmt(tax);
+  document.getElementById('r-profit').textContent = fmt(profit);
+  document.getElementById('r-margin').textContent = margin.toFixed(1) + '%';
+  document.getElementById('r-roi').textContent = roi.toFixed(1) + '%';
+
+  const cls = profit < 0 ? 'neg' : 'pos';
+  ['row-profit', 'row-margin', 'row-roi'].forEach((id) => {
+    const row = document.getElementById(id);
+    row.classList.remove('neg', 'pos');
+    row.classList.add(cls);
+  });
+}
+
+document.querySelectorAll('input').forEach((el) => el.addEventListener('input', recalc));
+recalc();
+</script>
 </body>
 </html>`;
 }
@@ -169,6 +336,12 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       res.end(await renderPage());
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/unit-economics') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(renderUnitEconomicsPage());
       return;
     }
 

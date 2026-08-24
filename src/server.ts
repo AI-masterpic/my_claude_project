@@ -221,16 +221,16 @@ function renderUnitEconomicsPage(): string {
         <input type="number" id="commission" value="13.5" step="0.1" min="0" max="100">
       </div>
       <div class="calc-field">
-        <label>Бонус на товар (от продавца), % <span class="val" id="v-bonusPct">5%</span></label>
-        <input type="range" id="bonusPct" value="5" step="0.5" min="5" max="15">
+        <label>Бонус на товар (от продавца), % <span class="val">обычно 5–15%</span></label>
+        <input type="number" id="bonusPct" value="0" step="0.5" min="0">
       </div>
       <div class="calc-field">
-        <label>Бонус за отзыв, ₸ <span class="val" id="v-reviewBonus">100</span></label>
-        <input type="range" id="reviewBonus" value="100" step="50" min="100" max="2000">
+        <label>Бонус за отзыв, ₸ <span class="val">обычно 100–2000</span></label>
+        <input type="number" id="reviewBonus" value="0" step="50" min="0">
       </div>
       <div class="calc-field">
-        <label>Реклама, % <span class="val" id="v-adsPct">5%</span></label>
-        <input type="range" id="adsPct" value="5" step="1" min="5" max="50">
+        <label>Реклама, % <span class="val">обычно 5–50%</span></label>
+        <input type="number" id="adsPct" value="0" step="1" min="0">
       </div>
       <div class="calc-field">
         <label>Налог ИП (упрощёнка) <span class="const-badge">константа</span></label>
@@ -243,7 +243,7 @@ function renderUnitEconomicsPage(): string {
         <tr><td>Цена продажи</td><td id="r-price">—</td></tr>
         <tr><td>Себестоимость</td><td id="r-cost">—</td></tr>
         <tr><td>Комиссия Kaspi</td><td id="r-commission">—</td></tr>
-        <tr><td>Kaspi Доставка (авто, по РК)</td><td id="r-delivery">—</td></tr>
+        <tr><td>Kaspi Доставка, по РК (авто + НДС 16%)</td><td id="r-delivery">—</td></tr>
         <tr><td>Бонус на товар</td><td id="r-bonusPct">—</td></tr>
         <tr><td>Бонус за отзыв</td><td id="r-reviewBonus">—</td></tr>
         <tr><td>Реклама</td><td id="r-ads">—</td></tr>
@@ -282,9 +282,6 @@ function recalc() {
   document.getElementById('v-price').textContent = price.toLocaleString('ru-RU');
   document.getElementById('v-cost').textContent = cost.toLocaleString('ru-RU');
   document.getElementById('v-commission').textContent = commissionPct + '%';
-  document.getElementById('v-bonusPct').textContent = bonusPct + '%';
-  document.getElementById('v-reviewBonus').textContent = reviewBonus.toLocaleString('ru-RU');
-  document.getElementById('v-adsPct').textContent = adsPct + '%';
 
   const commission = price * (commissionPct / 100);
   const delivery = kaspiDeliveryExclVat(price) * DELIVERY_VAT;

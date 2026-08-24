@@ -9,11 +9,13 @@
     "parser": "node dist/parser.js",
     "reprice": "node dist/pricing.js",
     "cabinet-sync": "node dist/cabinet-sync.js",
-    "seed": "node dist/seed.js"
+    "seed": "node dist/seed.js",
+    "import-kaspi": "node dist/import-kaspi-export.js"
   },
   "dependencies": {
+    "pg": "^8.13.0",
     "playwright": "^1.47.0",
-    "pg": "^8.13.0"
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

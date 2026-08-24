@@ -44,6 +44,7 @@ export async function fetchRecentOrders(daysBack = 14): Promise<OrderSummary[]> 
   const since = Date.now() - daysBack * 24 * 60 * 60 * 1000;
 
   const url = new URL(`${KASPI_API_BASE}/orders`);
+  url.searchParams.set('page[number]', '0');
   url.searchParams.set('page[size]', '100');
   url.searchParams.set('filter[orders][creationDate][$ge]', String(since));
 

@@ -325,6 +325,7 @@ recalc();
 function renderConnectKaspiPage(opts: {
   step: 'form' | 'code' | 'connected';
   merchantUid?: string;
+  loginCookie?: string;
   error?: string;
   notice?: string;
 }): string {
@@ -346,6 +347,7 @@ function renderConnectKaspiPage(opts: {
       <p>Код отправлен SMS. Введи его:</p>
       <form method="POST" action="/connect-kaspi/verify">
         <input type="hidden" name="merchantUid" value="${escapeHtml(opts.merchantUid ?? '')}">
+        <input type="hidden" name="loginCookie" value="${escapeHtml(opts.loginCookie ?? '')}">
         <input type="text" name="code" placeholder="Код из SMS" autofocus required style="width:100%;padding:8px;box-sizing:border-box;margin-bottom:10px">
         <button type="submit">Подтвердить</button>
       </form>
@@ -456,9 +458,9 @@ const server = http.createServer(async (req, res) => {
       const phone = params.get('phone') ?? '';
       const merchantUid = params.get('merchantUid') ?? '';
       try {
-        await requestLoginCode(phone);
+        const loginCookie = await requestLoginCode(phone);
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-        res.end(renderConnectKaspiPage({ step: 'code', merchantUid }));
+        res.end(renderConnectKaspiPage({ step: 'code', merchantUid, loginCookie }));
       } catch (err) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         res.end(renderConnectKaspiPage({ step: 'form', error: (err as Error).message }));
@@ -471,13 +473,14 @@ const server = http.createServer(async (req, res) => {
       const params = new URLSearchParams(body);
       const code = params.get('code') ?? '';
       const merchantUid = params.get('merchantUid') ?? '';
+      const loginCookie = params.get('loginCookie') ?? '';
       try {
-        await confirmLoginCode(code, merchantUid);
+        await confirmLoginCode(code, merchantUid, loginCookie);
         res.writeHead(302, { location: '/connect-kaspi' });
         res.end();
       } catch (err) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-        res.end(renderConnectKaspiPage({ step: 'code', merchantUid, error: (err as Error).message }));
+        res.end(renderConnectKaspiPage({ step: 'code', merchantUid, loginCookie, error: (err as Error).message }));
       }
       return;
     }

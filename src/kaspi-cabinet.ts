@@ -36,8 +36,15 @@ function formatKaspiPhone(rawDigits: string): string {
   return `+7 (${local.slice(0, 3)}) ${local.slice(3, 6)}-${local.slice(6, 8)}-${local.slice(8, 10)}`;
 }
 
-/** Step 1: request an SMS code. Confirmed working 2026-08-24. */
-export async function requestLoginCode(phoneDigits: string): Promise<void> {
+/**
+ * Step 1: request an SMS code. Kaspi sets a short-lived cookie on this
+ * response that ties "waiting for a code" to this specific phone — it
+ * MUST be sent back on step 2, or the code confirms against no session
+ * and fails with a generic {"errorCode":"FAILED"}. Returned here so the
+ * caller can carry it forward (this server has no browser-style cookie
+ * jar between separate requests).
+ */
+export async function requestLoginCode(phoneDigits: string): Promise<string> {
   const res = await fetch(`${LOGIN_BASE}/api/p/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...BROWSER_HEADERS },
@@ -46,16 +53,19 @@ export async function requestLoginCode(phoneDigits: string): Promise<void> {
   if (!res.ok) {
     throw new Error(`Failed to request SMS code: ${res.status} ${await res.text()}`);
   }
+  const setCookie = res.headers.getSetCookie?.() ?? [];
+  return setCookie.map((c) => c.split(';')[0]).join('; ');
 }
 
 /**
  * Step 2: confirm the SMS code, capture the session cookie, store it.
- * Confirmed working 2026-08-24 (real login, real account).
+ * loginCookie is whatever requestLoginCode() returned — required so
+ * Kaspi can match this code to the phone from step 1.
  */
-export async function confirmLoginCode(code: string, merchantUid: string): Promise<void> {
+export async function confirmLoginCode(code: string, merchantUid: string, loginCookie: string): Promise<void> {
   const res = await fetch(`${LOGIN_BASE}/api/p/login`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', ...BROWSER_HEADERS },
+    headers: { 'content-type': 'application/json', cookie: loginCookie, ...BROWSER_HEADERS },
     body: JSON.stringify({ _c: code }),
   });
   if (!res.ok) {
@@ -63,12 +73,26 @@ export async function confirmLoginCode(code: string, merchantUid: string): Promi
   }
 
   const setCookie = res.headers.getSetCookie?.() ?? [];
-  if (setCookie.length === 0) {
+  // Merge step 1's cookie with any new/updated ones from step 2 — some
+  // auth flows keep the original session id and just mark it verified,
+  // rather than issuing an entirely fresh cookie. Same-named cookies from
+  // step 2 override step 1's value.
+  const merged = new Map<string, string>();
+  for (const pair of loginCookie.split(';')) {
+    const [name, ...rest] = pair.trim().split('=');
+    if (name) merged.set(name, rest.join('='));
+  }
+  for (const raw of setCookie) {
+    const pair = raw.split(';')[0];
+    const [name, ...rest] = pair.trim().split('=');
+    if (name) merged.set(name, rest.join('='));
+  }
+  if (merged.size === 0) {
     throw new Error('Login succeeded but no session cookie was returned — Kaspi may have changed how sessions work.');
   }
-  // Each Set-Cookie entry is "name=value; Path=...; HttpOnly; ..." — we
-  // only need the "name=value" part to send back on future requests.
-  const cookiePairs = setCookie.map((c) => c.split(';')[0]).join('; ');
+  const cookiePairs = Array.from(merged.entries())
+    .map(([k, v]) => `${k}=${v}`)
+    .join('; ');
 
   await initSchema();
   const db = getPool();

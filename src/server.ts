@@ -18,6 +18,7 @@ import { buildPriceListCsv } from './pricelist-export.js';
 import { fetchRecentOrders, summarize, type OrdersDashboard } from './orders.js';
 import { calculateUnitEconomics, DEFAULT_COMMISSION_PCT } from './economics.js';
 import { hasValidSession, checkPassword, sessionCookieHeader, clearCookieHeader, renderLoginPage } from './auth.js';
+import { requestLoginCode, confirmLoginCode, isConnected, fetchRawProductList } from './kaspi-cabinet.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -157,7 +158,7 @@ async function renderPage(): Promise<string> {
 </style>
 </head>
 <body>
-  <nav class="tabs"><a class="tab active" href="/">Заказы и цены</a><a class="tab" href="/unit-economics">Юнит-экономика</a><form method="POST" action="/logout" style="margin-left:auto"><button type="submit" class="tab" style="background:none;border:none;cursor:pointer;font:inherit;padding:8px 14px;margin-top:0">Выйти</button></form></nav>
+  <nav class="tabs"><a class="tab active" href="/">Заказы и цены</a><a class="tab" href="/unit-economics">Юнит-экономика</a><a class="tab" href="/connect-kaspi">Kaspi кабинет</a><form method="POST" action="/logout" style="margin-left:auto"><button type="submit" class="tab" style="background:none;border:none;cursor:pointer;font:inherit;padding:8px 14px;margin-top:0">Выйти</button></form></nav>
   <h1>Заказы</h1>
   ${renderOrdersBlock(summary, error)}
   <h1>Цены и предзаказ</h1>
@@ -203,7 +204,7 @@ function renderUnitEconomicsPage(): string {
 </style>
 </head>
 <body>
-  <nav class="tabs"><a class="tab" href="/">Заказы и цены</a><a class="tab active" href="/unit-economics">Юнит-экономика</a><form method="POST" action="/logout" style="margin-left:auto"><button type="submit" class="tab" style="background:none;border:none;cursor:pointer;font:inherit;padding:8px 14px;margin-top:0">Выйти</button></form></nav>
+  <nav class="tabs"><a class="tab" href="/">Заказы и цены</a><a class="tab active" href="/unit-economics">Юнит-экономика</a><a class="tab" href="/connect-kaspi">Kaspi кабинет</a><form method="POST" action="/logout" style="margin-left:auto"><button type="submit" class="tab" style="background:none;border:none;cursor:pointer;font:inherit;padding:8px 14px;margin-top:0">Выйти</button></form></nav>
   <h1>Юнит-экономика</h1>
   <p class="muted">Калькулятор одной штуки товара — все поля переменные, кроме налога ИП (3%, упрощёнка). Доставка Kaspi считается сама по цене товара, по официальному тарифу "по Казахстану".</p>
 
@@ -321,6 +322,75 @@ recalc();
 </html>`;
 }
 
+function renderConnectKaspiPage(opts: {
+  step: 'form' | 'code' | 'connected';
+  merchantUid?: string;
+  error?: string;
+  notice?: string;
+}): string {
+  const nav = `<nav class="tabs"><a class="tab" href="/">Заказы и цены</a><a class="tab" href="/unit-economics">Юнит-экономика</a><a class="tab active" href="/connect-kaspi">Kaspi кабинет</a><form method="POST" action="/logout" style="margin-left:auto"><button type="submit" class="tab" style="background:none;border:none;cursor:pointer;font:inherit;padding:8px 14px;margin-top:0">Выйти</button></form></nav>`;
+
+  let body = '';
+  if (opts.step === 'connected') {
+    body = `
+    <div class="card" style="max-width:480px">
+      <p>✅ Kaspi кабинет подключён.</p>
+      <form method="POST" action="/connect-kaspi/sync">
+        <button type="submit">Синхронизировать товары сейчас</button>
+      </form>
+      <p class="muted">Первый запуск: посмотри логи Render (вкладка Logs) — там будет выведена одна полная запись товара в сыром виде, чтобы проверить структуру перед тем, как включать это на постоянку.</p>
+    </div>`;
+  } else if (opts.step === 'code') {
+    body = `
+    <div class="card" style="max-width:420px">
+      <p>Код отправлен SMS. Введи его:</p>
+      <form method="POST" action="/connect-kaspi/verify">
+        <input type="hidden" name="merchantUid" value="${escapeHtml(opts.merchantUid ?? '')}">
+        <input type="text" name="code" placeholder="Код из SMS" autofocus required style="width:100%;padding:8px;box-sizing:border-box;margin-bottom:10px">
+        <button type="submit">Подтвердить</button>
+      </form>
+    </div>`;
+  } else {
+    body = `
+    <div class="card" style="max-width:420px">
+      <p class="muted">Подключи свой кабинет продавца Kaspi — сервис сможет сам забирать список товаров, без ручного экспорта/импорта каждый раз.</p>
+      <form method="POST" action="/connect-kaspi">
+        <label style="font-size:13px;color:#756a60">Номер телефона (от кабинета Kaspi)</label>
+        <input type="text" name="phone" placeholder="7XXXXXXXXXX" required style="width:100%;padding:8px;box-sizing:border-box;margin:4px 0 10px">
+        <label style="font-size:13px;color:#756a60">ID продавца (видно в кабинете Kaspi, вверху)</label>
+        <input type="text" name="merchantUid" placeholder="30475177" required style="width:100%;padding:8px;box-sizing:border-box;margin:4px 0 10px">
+        <button type="submit">Отправить код</button>
+      </form>
+    </div>`;
+  }
+
+  return `<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Kaspi — подключение кабинета</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Arial, sans-serif; background: #faf7f3; color: #201c1a; padding: 32px; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 24px; border-bottom: 1px solid #e4dad0; max-width: 900px; }
+  .tab { font-size: 13px; color: #756a60; text-decoration: none; padding: 8px 14px; border-bottom: 2px solid transparent; }
+  .tab.active { color: #8c2a32; border-bottom-color: #8c2a32; font-weight: 600; }
+  .card { background: #fff; border: 1px solid #e4dad0; border-radius: 12px; padding: 20px; }
+  input[type="text"] { font-size: 14px; }
+  button { background: #8c2a32; color: #fff; border: none; padding: 10px 18px; border-radius: 8px; font-size: 14px; cursor: pointer; }
+  .muted { font-size: 12px; color: #9c9086; margin: 4px 0 12px; }
+  .err { color: #8c2a32; font-size: 13px; }
+</style>
+</head>
+<body>
+  ${nav}
+  <h1>Kaspi кабинет</h1>
+  ${opts.error ? `<p class="err">${escapeHtml(opts.error)}</p>` : ''}
+  ${opts.notice ? `<p class="muted">${escapeHtml(opts.notice)}</p>` : ''}
+  ${body}
+</body>
+</html>`;
+}
+
 async function readBody(req: http.IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(chunk as Buffer);
@@ -370,6 +440,64 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       res.end(await renderPage());
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/connect-kaspi') {
+      const connected = await isConnected();
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(renderConnectKaspiPage({ step: connected ? 'connected' : 'form' }));
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/connect-kaspi') {
+      const body = await readBody(req);
+      const params = new URLSearchParams(body);
+      const phone = params.get('phone') ?? '';
+      const merchantUid = params.get('merchantUid') ?? '';
+      try {
+        await requestLoginCode(phone);
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(renderConnectKaspiPage({ step: 'code', merchantUid }));
+      } catch (err) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(renderConnectKaspiPage({ step: 'form', error: (err as Error).message }));
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/connect-kaspi/verify') {
+      const body = await readBody(req);
+      const params = new URLSearchParams(body);
+      const code = params.get('code') ?? '';
+      const merchantUid = params.get('merchantUid') ?? '';
+      try {
+        await confirmLoginCode(code, merchantUid);
+        res.writeHead(302, { location: '/connect-kaspi' });
+        res.end();
+      } catch (err) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(renderConnectKaspiPage({ step: 'code', merchantUid, error: (err as Error).message }));
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/connect-kaspi/sync') {
+      try {
+        const products = await fetchRawProductList();
+        console.log(`Kaspi cabinet sync: fetched ${products.length} raw product record(s).`);
+        console.log('First raw record (for verifying field shape):', JSON.stringify(products[0], null, 2));
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(
+          renderConnectKaspiPage({
+            step: 'connected',
+            notice: `Синхронизация прошла: ${products.length} товар(ов) получено. Полная первая запись — в логах Render (вкладка Logs).`,
+          })
+        );
+      } catch (err) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(renderConnectKaspiPage({ step: 'connected', error: (err as Error).message }));
+      }
       return;
     }
 

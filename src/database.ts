@@ -80,6 +80,19 @@ export async function initSchema(): Promise<void> {
 
     CREATE INDEX IF NOT EXISTS idx_competitor_log_competitor ON competitor_price_log(competitor_id, scraped_at);
     CREATE INDEX IF NOT EXISTS idx_price_log_product ON price_change_log(product_id, created_at);
+
+    -- Single-row table: the live Kaspi cabinet session (phone+SMS login),
+    -- so the server can re-fetch your product list on its own without you
+    -- re-entering anything each time. This is a private, undocumented
+    -- Kaspi surface (see src/kaspi-cabinet.ts) — the cookie here is as
+    -- sensitive as a password, never log it or expose it in any response.
+    CREATE TABLE IF NOT EXISTS kaspi_session (
+      id           INTEGER PRIMARY KEY DEFAULT 1,
+      cookie       TEXT NOT NULL,
+      merchant_uid TEXT NOT NULL,
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT single_row CHECK (id = 1)
+    );
   `);
 
   // Unit-economics fields — added after the initial schema, so existing

@@ -17,6 +17,7 @@ import { getPool, initSchema } from './database.js';
 import { buildPriceListCsv } from './pricelist-export.js';
 import { fetchRecentOrders, summarize, type OrdersDashboard } from './orders.js';
 import { calculateUnitEconomics, DEFAULT_COMMISSION_PCT } from './economics.js';
+import { hasValidSession, checkPassword, sessionCookieHeader, clearCookieHeader, renderLoginPage } from './auth.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -156,7 +157,7 @@ async function renderPage(): Promise<string> {
 </style>
 </head>
 <body>
-  <nav class="tabs"><a class="tab active" href="/">Заказы и цены</a><a class="tab" href="/unit-economics">Юнит-экономика</a></nav>
+  <nav class="tabs"><a class="tab active" href="/">Заказы и цены</a><a class="tab" href="/unit-economics">Юнит-экономика</a><form method="POST" action="/logout" style="margin-left:auto"><button type="submit" class="tab" style="background:none;border:none;cursor:pointer;font:inherit;padding:8px 14px;margin-top:0">Выйти</button></form></nav>
   <h1>Заказы</h1>
   ${renderOrdersBlock(summary, error)}
   <h1>Цены и предзаказ</h1>
@@ -202,7 +203,7 @@ function renderUnitEconomicsPage(): string {
 </style>
 </head>
 <body>
-  <nav class="tabs"><a class="tab" href="/">Заказы и цены</a><a class="tab active" href="/unit-economics">Юнит-экономика</a></nav>
+  <nav class="tabs"><a class="tab" href="/">Заказы и цены</a><a class="tab active" href="/unit-economics">Юнит-экономика</a><form method="POST" action="/logout" style="margin-left:auto"><button type="submit" class="tab" style="background:none;border:none;cursor:pointer;font:inherit;padding:8px 14px;margin-top:0">Выйти</button></form></nav>
   <h1>Юнит-экономика</h1>
   <p class="muted">Калькулятор одной штуки товара — все поля переменные, кроме налога ИП (3%, упрощёнка). Доставка Kaspi считается сама по цене товара, по официальному тарифу "по Казахстану".</p>
 
@@ -329,6 +330,42 @@ async function readBody(req: http.IncomingMessage): Promise<string> {
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
+
+    // Kaspi's own servers fetch this on a schedule with no way to log in
+    // first — never gate it behind the password.
+    const isPublicPath = url.pathname === '/price-list.csv';
+
+    if (req.method === 'GET' && url.pathname === '/login') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(renderLoginPage());
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/login') {
+      const body = await readBody(req);
+      const params = new URLSearchParams(body);
+      const password = params.get('password') ?? '';
+      if (checkPassword(password)) {
+        res.writeHead(302, { location: '/', 'set-cookie': sessionCookieHeader(password) });
+        res.end();
+      } else {
+        res.writeHead(401, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(renderLoginPage('Неверный пароль'));
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/logout') {
+      res.writeHead(302, { location: '/login', 'set-cookie': clearCookieHeader() });
+      res.end();
+      return;
+    }
+
+    if (!isPublicPath && !hasValidSession(req.headers.cookie)) {
+      res.writeHead(302, { location: '/login' });
+      res.end();
+      return;
+    }
 
     if (req.method === 'GET' && url.pathname === '/') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });

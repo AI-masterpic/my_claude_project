@@ -103,6 +103,23 @@ export async function confirmLoginCode(code: string, merchantUid: string, loginC
   );
 }
 
+/**
+ * Manual path: paste the mc-session/mc-sid cookie values straight from
+ * Chrome's own DevTools -> Application -> Cookies panel into the form on
+ * THIS site (never through chat) — sidesteps needing to reverse-engineer
+ * whatever exchange step turns an idmc login into an mc.shop.kaspi.kz
+ * session. Same storage as the phone+SMS path.
+ */
+export async function saveManualSession(cookiePairs: string, merchantUid: string): Promise<void> {
+  await initSchema();
+  const db = getPool();
+  await db.query(
+    `INSERT INTO kaspi_session (id, cookie, merchant_uid, updated_at) VALUES (1, $1, $2, NOW())
+     ON CONFLICT (id) DO UPDATE SET cookie = EXCLUDED.cookie, merchant_uid = EXCLUDED.merchant_uid, updated_at = NOW()`,
+    [cookiePairs.trim(), merchantUid]
+  );
+}
+
 export async function isConnected(): Promise<boolean> {
   await initSchema();
   const db = getPool();
@@ -140,7 +157,7 @@ export async function fetchRawProductList(): Promise<unknown[]> {
   for (;;) {
     const url = `${CABINET_BASE}/bff/offer-view/list?m=${merchantUid}&p=${page}&l=${pageSize}&a=false`;
     const res = await fetch(url, {
-      headers: { cookie, ...BROWSER_HEADERS },
+      headers: { cookie, 'x-auth-version': '3', ...BROWSER_HEADERS },
     });
     if (!res.ok) {
       throw new Error(`Product list fetch failed: ${res.status} ${await res.text()}`);

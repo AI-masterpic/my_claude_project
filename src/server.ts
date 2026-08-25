@@ -18,7 +18,7 @@ import { buildPriceListCsv } from './pricelist-export.js';
 import { fetchRecentOrders, summarize, type OrdersDashboard } from './orders.js';
 import { calculateUnitEconomics, DEFAULT_COMMISSION_PCT } from './economics.js';
 import { hasValidSession, checkPassword, sessionCookieHeader, clearCookieHeader, renderLoginPage } from './auth.js';
-import { requestLoginCode, confirmLoginCode, isConnected, fetchRawProductList } from './kaspi-cabinet.js';
+import { requestLoginCode, confirmLoginCode, isConnected, fetchRawProductList, saveManualSession } from './kaspi-cabinet.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -363,6 +363,16 @@ function renderConnectKaspiPage(opts: {
         <input type="text" name="merchantUid" placeholder="30475177" required style="width:100%;padding:8px;box-sizing:border-box;margin:4px 0 10px">
         <button type="submit">Отправить код</button>
       </form>
+    </div>
+    <div class="card" style="max-width:420px;margin-top:16px">
+      <p class="muted">Альтернатива — если SMS-вход через сайт не работает: вставь куки сессии вручную (Chrome → F12 → Application → Cookies → домен mc.shop.kaspi.kz → скопируй значения mc-session и mc-sid).</p>
+      <form method="POST" action="/connect-kaspi/manual">
+        <label style="font-size:13px;color:#756a60">ID продавца</label>
+        <input type="text" name="merchantUid" placeholder="30475177" required style="width:100%;padding:8px;box-sizing:border-box;margin:4px 0 10px">
+        <label style="font-size:13px;color:#756a60">Куки (mc-session=...; mc-sid=...)</label>
+        <textarea name="cookiePairs" placeholder="mc-session=...; mc-sid=..." required style="width:100%;padding:8px;box-sizing:border-box;margin:4px 0 10px;font-family:monospace;font-size:12px" rows="3"></textarea>
+        <button type="submit">Сохранить сессию</button>
+      </form>
     </div>`;
   }
 
@@ -481,6 +491,22 @@ const server = http.createServer(async (req, res) => {
       } catch (err) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
         res.end(renderConnectKaspiPage({ step: 'code', merchantUid, loginCookie, error: (err as Error).message }));
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/connect-kaspi/manual') {
+      const body = await readBody(req);
+      const params = new URLSearchParams(body);
+      const merchantUid = params.get('merchantUid') ?? '';
+      const cookiePairs = params.get('cookiePairs') ?? '';
+      try {
+        await saveManualSession(cookiePairs, merchantUid);
+        res.writeHead(302, { location: '/connect-kaspi' });
+        res.end();
+      } catch (err) {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(renderConnectKaspiPage({ step: 'form', error: (err as Error).message }));
       }
       return;
     }

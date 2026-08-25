@@ -169,7 +169,7 @@ async function renderPage(): Promise<string> {
     </table>
     <button type="submit">Сохранить</button>
   </form>
-  <p class="econ-note">Прибыль/маржа считаются автоматически: комиссия Kaspi ${DEFAULT_COMMISSION_PCT}% (с НДС), доставка по Казахстану (799,11₸ + НДС 16% для заказов 5 000–15 000₸), налог ИП на упрощёнке 3% с оборота.</p>
+  <p class="econ-note">Прибыль/маржа считаются автоматически: комиссия Kaspi ${DEFAULT_COMMISSION_PCT}% (с НДС), доставка по Казахстану (799₸ + НДС для заказов 5 000–10 000₸; от 1 299₸ + НДС и уже по весу для заказов от 10 000₸ — тариф с 1 января 2026), налог ИП на упрощёнке 3% с оборота.</p>
   <p class="link">Ссылка для автозагрузки в Kaspi (вставить один раз в Товары → Загрузить прайс-лист → Автоматическая загрузка):<br><code>${'{ДОМЕН_ПОСЛЕ_ДЕПЛОЯ}'}/price-list.csv</code></p>
 </body>
 </html>`;
@@ -262,9 +262,12 @@ function renderUnitEconomicsPage(): string {
 // "Информация о стоимости услуг — Kaspi Доставка" PDF). Independent of
 // weight below 15,000₸; mirrors src/economics.ts on the server side.
 function kaspiDeliveryExclVat(price) {
-  if (price < 5000) return 0;
-  if (price <= 15000) return 799.11;
-  return 1299.11; // >15,000₸, "до 5 кг" band — this calculator assumes light goods
+  // Tariffs effective 2026-01-01 (guide.kaspi.kz/partner/ru/shop/delivery/shipping/q2288)
+  if (price < 1000) return 49;
+  if (price < 3000) return 149;
+  if (price < 5000) return 199;
+  if (price < 10000) return 799;
+  return 1299; // >=10,000₸, "до 5 кг" band — this calculator assumes light goods
 }
 const DELIVERY_VAT = 1.16;
 const TAX_PCT = 3;
